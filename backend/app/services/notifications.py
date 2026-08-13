@@ -1,17 +1,23 @@
 """
 Notification service for DevBoard.
 
-TODO: Implement email notifications when issue status changes.
-      Currently logs to stdout only. A real implementation should:
-        1. Load SMTP settings from config (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS)
-        2. Look up the issue assignee and reporter emails from the database
-        3. Render an HTML template with the status change details
-        4. Send via smtplib or an async library like aiosmtplib
+Sends email notifications when an issue status changes using the smtplib
+standard library (no third-party dependencies). SMTP settings are read from
+environment variables:
 
-      A stub for the async email send is left below.
+    SMTP_HOST  — SMTP server hostname
+    SMTP_PORT  — SMTP server port (default 587)
+    SMTP_USER  — username for SMTP authentication
+    SMTP_PASS  — password for SMTP authentication
+
+If SMTP config is missing, a warning is logged and sending is skipped
+rather than crashing.
 """
 
 import logging
+import os
+import smtplib
+from email.mime.text import MIMEText
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -26,9 +32,11 @@ async def send_status_change_notification(
     reporter_email: Optional[str] = None,
 ) -> None:
     """
-    Notify relevant users when an issue status changes.
+    Notify the issue reporter when an issue status changes.
 
-    Currently a no-op stub — replace with real email logic.
+    Skips sending (with a logged warning) when SMTP config is missing or
+    no reporter email is available. Send failures are logged but do not
+    propagate, so a broken mail server never breaks the API.
     """
     logger.info(
         "[NOTIFY] Issue #%d ('%s') changed: %s → %s | "
@@ -41,27 +49,36 @@ async def send_status_change_notification(
         reporter_email or "unknown",
     )
 
-    # TODO: implement actual email sending
-    # Example skeleton:
-    #
-    # import aiosmtplib
-    # from email.mime.text import MIMEText
-    #
-    # if not assignee_email:
-    #     return
-    #
-    # message = MIMEText(
-    #     f"Issue '{issue_title}' moved from {old_status} to {new_status}."
-    # )
-    # message["Subject"] = f"[DevBoard] Issue #{issue_id} status update"
-    # message["From"] = settings.smtp_user
-    # message["To"] = assignee_email
-    #
-    # await aiosmtplib.send(
-    #     message,
-    #     hostname=settings.smtp_host,
-    #     port=settings.smtp_port,
-    #     username=settings.smtp_user,
-    #     password=settings.smtp_pass,
-    #     use_tls=True,
-    # )
+    if not reporter_email:
+        logger.warning("[NOTIFY] No reporter email for issue #%d — skipping", issue_id)
+        return
+
+    host = os.getenv("SMTP_HOST")
+    if not host:
+        logger.warning("[NOTIFY] SMTP_HOST not set — skipping email for issue #%d", issue_id)
+        return
+
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "")
+    password = os.getenv("SMTP_PASS", "")
+
+    link = f"https://devboard.example.com/issues/{issue_id}"
+    body = (
+        f"Issue '{issue_title}' (#{issue_id}) changed status from "
+        f"'{old_status}' to '{new_status}'.\n\n"
+        f"View it at: {link}"
+    )
+    message = MIMEText(body)
+    message["Subject"] = f"[DevBoard] Issue #{issue_id} status update"
+    message["From"] = user or "devboard@example.com"
+    message["To"] = reporter_email
+
+    try:
+        with smtplib.SMTP(host, port, timeout=10) as smtp:
+            if user:
+                smtp.starttls()
+                smtp.login(user, password)
+            smtp.send_message(message)
+        logger.info("[NOTIFY] Sent status-change email for issue #%d to %s", issue_id, reporter_email)
+    except Exception as exc:
+        logger.warning("[NOTIFY] Failed to send email for issue #%d: %s", issue_id, exc)

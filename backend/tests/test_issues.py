@@ -130,13 +130,16 @@ def test_pagination_second_page(client, auth_headers, project):
 
 
 def test_search_returns_501_until_implemented(client, auth_headers, project):
-    """Search endpoint should return 501 until the TODO is completed."""
+    """Search endpoint should no longer return 501 once implemented."""
+    _create_issue(client, auth_headers, project["id"], title="Login page crashes on Safari")
+
     resp = client.get(
         f"/projects/{project['id']}/issues/search",
         params={"q": "login"},
         headers=auth_headers,
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
 
 
 def test_search_finds_matching_issues(client, auth_headers, project):
